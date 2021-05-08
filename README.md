@@ -1,73 +1,82 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo_text.svg" width="320" alt="Nest Logo" /></a>
-</p>
-
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
-
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
 ## Description
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Example of running a bull job in forked process
 
-## Installation
 
-```bash
-$ npm install
+The NestJS bull package is nice wrapper around bull which provides support for jobs being run in a separate process. 
+
+To take advantage of bulls auto forking processing, you just need to provide a path to a file that can act as the jobs processor.
+
+Create the separate file you want to run the job with
+
+```ts
+import { Logger } from '@nestjs/common';
+import { DoneCallback, Job } from 'bull';
+
+export default function (job: Job<{ message: string }>, cb: DoneCallback) {
+  Logger.verbose(`${job.data.message} (pid ${process.pid})`, `SEPARATE`);
+  cb(null, 'Hurrah');
+}
 ```
 
-## Running the app
+Remember, this file will need to be able to be run on its own. Of course you can add additional imports and such, but it will be running in a different process so your application and its resources will not be available to it.
 
-```bash
-# development
-$ npm run start
+When registering your queues, specify the path to the separate file. Here I register 2 queues. One to run in the SAME process as the application and one the will run in a SEPARATE process
 
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+```ts
+@Module({
+  imports: [
+    // register root
+    BullModule.forRoot({
+      redis: {
+        host: 'localhost',
+        port: 6379,
+      },
+    }),
+    // register queues
+    BullModule.registerQueue(
+      {
+        name: 'SAME', // this will run in same process as this module
+      },
+      {
+        name: 'SEPARATE', // this will run in its own process
+        processors: [join(__dirname, 'separate.process')],
+      },
+    ),
+  ],
+  controllers: [AppController],
+  providers: [SameService],
+})
+export class AppModule {}
 ```
 
-## Test
+Then you can fire off jobs as normal. Below I fire off a job to a queue in the application process, then another job into the separate file
 
-```bash
-# unit tests
-$ npm run test
+```ts
+@Controller()
+export class AppController {
+  constructor(
+    @InjectQueue('SAME') private readonly same: Queue,
+    @InjectQueue('SEPARATE') private readonly separate: Queue,
+  ) {}
 
-# e2e tests
-$ npm run test:e2e
+  @Get()
+  getHello(): string {
 
-# test coverage
-$ npm run test:cov
+    // Example of adding a job processed in same thread
+    this.same.add({ message: 'Knock knock.' });
+
+    // Example of adding a job processed in separate thread
+    this.separate.add({ message: 'FORK OFF.' });
+
+    return 'ok';
+  }
+}
 ```
 
-## Support
+localhost:3000 then outputs
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](LICENSE).
+```bash
+[Nest] 13400   - 08/05/2021, 16:49:18   [SAME] Knock knock. (pid 13400) +8821ms
+[Nest] 2660   - 08/05/2021, 16:49:19   [SEPARATE] FORK OFF. (pid 2660)
+```
